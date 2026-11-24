@@ -4,7 +4,15 @@ project("modmenu")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(modmenu SHARED native-lib.cpp)
+set(SOURCES native-lib.cpp)
+if(EXISTS ${CMAKE_SOURCE_DIR}/and64/And64InlineHook.cpp)
+    list(APPEND SOURCES and64/And64InlineHook.cpp)
+    set_source_files_properties(and64/And64InlineHook.cpp PROPERTIES
+            COMPILE_FLAGS "-Wno-register -Wno-c++17-extensions -Wno-deprecated-declarations -Wno-unused-function")
+    message(STATUS "modmenu: using real And64InlineHook for ${ANDROID_ABI}")
+endif()
+
+add_library(modmenu SHARED ${SOURCES})
 
 target_compile_options(modmenu PRIVATE
         -O2
@@ -14,16 +22,6 @@ target_compile_options(modmenu PRIVATE
         -pthread
         -Wall
         -Wno-unused-parameter)
-
-if(EXISTS ${CMAKE_SOURCE_DIR}/dobby/${ANDROID_ABI}/libdobby.a)
-    add_library(dobby STATIC IMPORTED)
-    set_target_properties(dobby PROPERTIES IMPORTED_LOCATION
-            ${CMAKE_SOURCE_DIR}/dobby/${ANDROID_ABI}/libdobby.a)
-    target_link_libraries(modmenu dobby)
-    message(STATUS "modmenu: linking libdobby.a for ${ANDROID_ABI}")
-else()
-    message(WARNING "modmenu: dobby/${ANDROID_ABI}/libdobby.a NOT found")
-endif()
 
 find_library(log-lib log)
 target_include_directories(modmenu PRIVATE ${CMAKE_SOURCE_DIR})
