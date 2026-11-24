@@ -33,7 +33,13 @@
 #include "Features.h"
 #include "il2cpp/Il2CppApi.h"
 #include "kitty/KittyMemory.h"
+#if defined(__aarch64__) && __has_include("and64/And64InlineHook.hpp")
+#include "and64/And64InlineHook.hpp"
+#define USE_A64_HOOK 1
+#else
 #include "dobby/dobby.h"
+#define USE_A64_HOOK 0
+#endif
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "ModMenu", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ModMenu", __VA_ARGS__)
@@ -538,8 +544,24 @@ static bool safeHook(Il2CppClass* klass, const char* methodName, int args,
         LOGE("[hook] %s: unaligned ARM64 addr %p", label, ptr);
         return false;
     }
+    // Guard against tiny <=12-byte getter/return stubs that cannot fit a 16-byte trampoline
+    const uint32_t* insns = reinterpret_cast<const uint32_t*>(ptr);
+    if (insns[0] == 0xd65f03c0u || insns[1] == 0xd65f03c0u || insns[2] == 0xd65f03c0u) {
+        LOGI("[hook] %s: '%s' stub <=12B, skipped safely", label, methodName);
+        return false;
+    }
 #endif
 
+#if USE_A64_HOOK
+    *outOrig = nullptr;
+    GUARDED_RUN(label, {
+        A64HookFunction(ptr, replaceFn, outOrig);
+    });
+    if (*outOrig == nullptr) {
+        LOGE("[hook] %s: A64HookFunction('%s') failed", label, methodName);
+        return false;
+    }
+#else
     int rc = -1;
     GUARDED_RUN(label, {
         rc = DobbyHook(ptr, replaceFn, outOrig);
@@ -549,6 +571,7 @@ static bool safeHook(Il2CppClass* klass, const char* methodName, int args,
         LOGE("[hook] %s: DobbyHook('%s') failed rc=%d", label, methodName, rc);
         return false;
     }
+#endif
 
     F.hooksInstalled.fetch_add(1, std::memory_order_relaxed);
     LOGI("[hook] %s: hooked '%s' @ %p", label, methodName, ptr);
