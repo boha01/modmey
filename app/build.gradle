@@ -3,7 +3,7 @@ android {
     namespace 'com.bonika.modmenu'
     compileSdk 34
     defaultConfig {
-        applicationId "com.mycompany.application"
+        applicationId "com.bonika.modmenu"
         minSdk 26
         targetSdk 34
         versionCode 1
