@@ -24,5 +24,8 @@ target_compile_options(modmenu PRIVATE
         -Wno-unused-parameter)
 
 find_library(log-lib log)
-target_include_directories(modmenu PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(modmenu PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/il2cpp
+        ${CMAKE_SOURCE_DIR}/kitty)
 target_link_libraries(modmenu ${log-lib} android dl)
