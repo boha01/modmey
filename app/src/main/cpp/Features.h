@@ -31,6 +31,7 @@ struct Features {
 
     // PROTECTION / SPOOFER
     std::atomic<bool> deviceSpoof{false};
+    std::atomic<bool> spoofHooksInstalled{false};
     std::atomic<bool> safeMode{false};
     std::atomic<uint32_t> spoofSeed{0x5A17B04Au};
 
