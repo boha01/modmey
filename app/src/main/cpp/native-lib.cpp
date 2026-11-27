@@ -1,5 +1,5 @@
 // ============================================================
-// native-lib.cpp - BOHA XVIP / ModMenuPro v7
+// native-lib.cpp - BOHA XVIP / ModMenuPro v7 (Integrated RE)
 // ============================================================
 #include <jni.h>
 #include <thread>
@@ -492,39 +492,36 @@ static void hook_RangeCull(void* self, const MethodInfo* m) {
 }
 
 // ============================================================
-// 10. INTEGRITY PROBE (BYPASS ANTI-CHEAT)
+// 10. INTEGRITY PROBE (EXACT HOOKS FROM REVERSE ENGINEERING)
 // ============================================================
-static VoidUpdate_t orig_CheckServerProof = nullptr;
-static VoidUpdate_t orig_CheckDeviceKey = nullptr;
+using IntegrityEnabled_t = bool (*)(void*, const MethodInfo*);
+using IntegritySign_t = void* (*)(void*, void*, const MethodInfo*);
+using IntegrityWrite_t = void (*)(void*, void*, const MethodInfo*);
+using IntegrityRead_t = void (*)(void*, void*, const MethodInfo*);
 
-static void hook_CheckServerProof(void* self, const MethodInfo* m) {
-    LOGI("[IntegrityProbe] ServerProof check bypassed.");
-    return;
+static IntegrityEnabled_t orig_IsEnabled = nullptr;
+static IntegritySign_t orig_Sign = nullptr;
+static IntegrityWrite_t orig_ProofWrite = nullptr;
+static IntegrityRead_t orig_ChallengeRead = nullptr;
+
+static bool hook_IntegrityIsEnabled(void* self, const MethodInfo* m) {
+    LOGI("[IntegrityProbe] CheckIntegrityServerProofSystem.IsEnabled -> FALSE");
+    return false; 
 }
-static void hook_CheckDeviceKey(void* self, const MethodInfo* m) {
-    LOGI("[IntegrityProbe] DeviceKey check bypassed.");
-    return;
+
+static void* hook_IntegritySign(void* self, void* data, const MethodInfo* m) {
+    LOGI("[IntegrityProbe] CheckIntegrityDeviceKeyService.Sign called");
+    return orig_Sign ? orig_Sign(self, data, m) : nullptr;
 }
 
-// ============================================================
-// 11. NETWORK INTERCEPTION
-// ============================================================
-using DatagramReceived_t = void (*)(void*, void*, const MethodInfo*);
-static DatagramReceived_t orig_EntityMetaDatagramReceived = nullptr;
+static void hook_IntegrityProofWrite(void* self, void* writer, const MethodInfo* m) {
+    LOGI("[IntegrityProbe] CheckIntegrityProofDatagram.Write called");
+    if (orig_ProofWrite) orig_ProofWrite(self, writer, m);
+}
 
-static void hook_EntityMetaDatagramReceived(void* self, void* datagram, const MethodInfo* m) {
-    if (datagram) {
-        Il2CppClass* klass = il2cpp.object_get_class ? il2cpp.object_get_class(datagram) : nullptr;
-        if (klass) {
-            const char* name = il2cpp.class_get_name ? il2cpp.class_get_name(klass) : "";
-            if (name && strstr(name, "CheckIntegrity")) {
-                LOGI("[IBNet] Intercepted Integrity Datagram: %s", name);
-            }
-        }
-    }
-    if (orig_EntityMetaDatagramReceived) {
-        orig_EntityMetaDatagramReceived(self, datagram, m);
-    }
+static void hook_IntegrityChallengeRead(void* self, void* reader, const MethodInfo* m) {
+    LOGI("[IntegrityProbe] CheckIntegrityChallengeDatagram.Read called");
+    if (orig_ChallengeRead) orig_ChallengeRead(self, reader, m);
 }
 
 // ============================================================
@@ -806,25 +803,18 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         }
     }
 
-    // --- 10. INTEGRITY PROBE (BYPASS ANTI-CHEAT) ---
+    // --- 10. INTEGRITY PROBE (EXACT HOOKS FROM RE) ---
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.IntegrityFeature.Systems.CheckIntegrityServerProofSystem")) {
-        if (!safeHook(k, "OnUpdate", -1, (void*)hook_CheckServerProof, (void**)&orig_CheckServerProof, libBase, libEnd, "Integrity.ServerProof")) {
-            safeHook(k, "ProcessProof", -1, (void*)hook_CheckServerProof, (void**)&orig_CheckServerProof, libBase, libEnd, "Integrity.ServerProof2");
-        }
+        safeHook(k, "IsEnabled", 0, (void*)hook_IntegrityIsEnabled, (void**)&orig_IsEnabled, libBase, libEnd, "Integrity.IsEnabled");
     }
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.IntegrityFeature.Systems.CheckIntegrityDeviceKeyService")) {
-        safeHook(k, "OnUpdate", -1, (void*)hook_CheckDeviceKey, (void**)&orig_CheckDeviceKey, libBase, libEnd, "Integrity.DeviceKey");
+        safeHook(k, "Sign", 1, (void*)hook_IntegritySign, (void**)&orig_Sign, libBase, libEnd, "Integrity.Sign");
     }
-
-    // --- 11. NETWORK INTERCEPTION ---
-    if (auto* k = findClassSafe(domain, "IBNet")) {
-        safeHook(k, "OnDatagramReceived", 1, (void*)hook_EntityMetaDatagramReceived, (void**)&orig_EntityMetaDatagramReceived, libBase, libEnd, "IBNet.DatagramReceived");
+    if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.IntegrityFeature.Datagrams.CheckIntegrityProofDatagram")) {
+        safeHook(k, "Write", 1, (void*)hook_IntegrityProofWrite, (void**)&orig_ProofWrite, libBase, libEnd, "Integrity.ProofWrite");
     }
-    if (auto* k = findClassSafe(domain, "dev.Scripts.Networking.IBNet.IBNet")) {
-        safeHook(k, "OnDatagramReceived", 1, (void*)hook_EntityMetaDatagramReceived, (void**)&orig_EntityMetaDatagramReceived, libBase, libEnd, "IBNet.DatagramReceived");
-    }
-    if (auto* k = findClassSafe(domain, "FlakeFlow.MetaClientWrapper")) {
-        safeHook(k, "OnDatagramReceived", 1, (void*)hook_EntityMetaDatagramReceived, (void**)&orig_EntityMetaDatagramReceived, libBase, libEnd, "MetaClient.DatagramReceived");
+    if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.IntegrityFeature.Datagrams.CheckIntegrityChallengeDatagram")) {
+        safeHook(k, "Read", 1, (void*)hook_IntegrityChallengeRead, (void**)&orig_ChallengeRead, libBase, libEnd, "Integrity.ChallengeRead");
     }
 }
 
