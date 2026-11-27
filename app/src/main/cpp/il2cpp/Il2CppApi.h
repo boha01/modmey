@@ -1,5 +1,5 @@
 #pragma once
-// Runtime-resolved Il2Cpp API via dlsym(RTLD_NOLOAD) from libdatastore_shared.so
+// Runtime-resolved Il2Cpp API via dlsym(RTLD_NOLOAD) from libil2cpp.so
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -35,6 +35,7 @@ using il2cpp_string_new_t                 = Il2CppString* (*)(const char*);
 using il2cpp_object_get_class_t           = Il2CppClass* (*)(void*);
 using il2cpp_object_unbox_t               = void* (*)(void*);
 using il2cpp_class_get_type_t             = const Il2CppType* (*)(Il2CppClass*);
+using il2cpp_class_get_name_t             = const char* (*)(Il2CppClass*);
 
 struct Il2CppApi {
     il2cpp_domain_get_t                 domain_get = nullptr;
@@ -54,6 +55,7 @@ struct Il2CppApi {
     il2cpp_object_get_class_t           object_get_class = nullptr;
     il2cpp_object_unbox_t               object_unbox = nullptr;
     il2cpp_class_get_type_t             class_get_type = nullptr;
+    il2cpp_class_get_name_t             class_get_name = nullptr;
     bool ok = false;
 
     bool init(void* handle) {
@@ -76,6 +78,7 @@ struct Il2CppApi {
         object_get_class       = reinterpret_cast<il2cpp_object_get_class_t>(sym("il2cpp_object_get_class"));
         object_unbox           = reinterpret_cast<il2cpp_object_unbox_t>(sym("il2cpp_object_unbox"));
         class_get_type         = reinterpret_cast<il2cpp_class_get_type_t>(sym("il2cpp_class_get_type"));
+        class_get_name         = reinterpret_cast<il2cpp_class_get_name_t>(sym("il2cpp_class_get_name"));
         ok = domain_get && domain_get_assemblies && assembly_get_image && class_from_name && class_get_method;
         IL_LOG("Il2CppApi init ok=%d", ok ? 1 : 0);
         return ok;
