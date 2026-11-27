@@ -1,6 +1,5 @@
 #pragma once
-// Runtime-resolved Il2Cpp API via dlsym(RTLD_NOLOAD) from libil2cpp.so
-// Includes full symbol set and null/bounds-checked lookup helpers.
+// Runtime-resolved Il2Cpp API via dlsym(RTLD_NOLOAD) from libdatastore_shared.so
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
