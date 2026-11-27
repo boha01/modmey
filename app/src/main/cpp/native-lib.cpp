@@ -1,25 +1,14 @@
 // ============================================================
-// native-lib.cpp - BOHA XVIP / ModMenuPro v7
-// ------------------------------------------------------------
-// * Thread-safe SIGSEGV/SIGBUS Fault Shield (ScopedFaultGuard)
-// * Zero-lag cached libil2cpp.so base/range + relaxed atomics
-// * Full Il2Cpp runtime resolution (no hardcoded static RVAs)
-// * All hooks integrated from libdatastore_shared.so analysis:
-//     1. SR-SPOOF   (Device ID Spoofer / Unban)
-//     2. ESP        (Transform & PhysicsActor tracking)
-//     3. Weapon     (SilentAim / WallPen / OnUpdate)
-//     4. Camera     (FOV / UniversalCamera / FreeCam / Spectate)
-//     5. SkyWalk    (CharacterActor / FallState / StateMachine / Head)
-//     6. Health/UI  (ElementHealthSync / HudHealthView / Sliders / Fall)
-//     7. Movement   (PhysicsActor Velocity / WalkOnAir / AutoWalk / NavGraph)
-//     8. Sync/Car   (Clothes / Interp / VehBody / Stamina)
-//     9. World/Range(DayNight / RemoteCollisionCulling 5-system loop)
+// native-lib.cpp — ModMenuPro v8 merged build
+// Target: libdatastore_shared.so (il2cpp in game APK)
+// Adds: q.dat decryption via SilkGuard, signature-bypass hooks
 // ============================================================
 
 #include <jni.h>
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <vector>
 #include <cinttypes>
 #include <cstring>
 #include <cstdio>
@@ -31,8 +20,8 @@
 #include <android/log.h>
 
 #include "Features.h"
-#include "il2cpp/Il2CppApi.h"
-#include "kitty/KittyMemory.h"
+#include "Il2CppApi.h"
+#include "KittyMemory.h"
 #if defined(__aarch64__) && __has_include("and64/And64InlineHook.hpp")
 #include "and64/And64InlineHook.hpp"
 #define USE_A64_HOOK 1
@@ -45,7 +34,12 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ModMenu", __VA_ARGS__)
 
 // ============================================================
-// SIGSEGV / SIGBUS FAULT SHIELD (matches SEGV-SHIELD pattern)
+// Target library name (game renames libil2cpp.so)
+// ============================================================
+static constexpr const char* kIl2CppLibName = "libdatastore_shared.so";
+
+// ============================================================
+// SIGSEGV / SIGBUS FAULT SHIELD
 // ============================================================
 static thread_local sigjmp_buf t_faultJmp;
 static thread_local volatile sig_atomic_t t_faultGuarded = 0;
@@ -105,7 +99,6 @@ static std::atomic<uintptr_t> g_libBase{0};
 static std::atomic<uintptr_t> g_libEnd{0};
 static std::atomic<bool> g_initStarted{false};
 
-// Spoofed device ID helper (cached hex string)
 static char g_spoofHex[33] = "9a4f2c81d7e04b31a8c502e9f1b63d48";
 static void refreshSpoofHex(uint32_t seed) {
     static const char hex[] = "0123456789abcdef";
@@ -124,7 +117,7 @@ static Il2CppString* makeSpoofIl2CppString() {
 }
 
 // ============================================================
-// 1. SR-SPOOF HOOKS (Device ID Spoofer / Unban)
+// SR-SPOOF HOOKS
 // ============================================================
 using StaticStrGetter_t = Il2CppString* (*)(const MethodInfo*);
 using AuthFromDevice_t  = void* (*)(void*, void*, const MethodInfo*);
@@ -175,7 +168,18 @@ static Il2CppString* hook_SettingsGetDeviceId(void* self, const MethodInfo* meth
 }
 
 // ============================================================
-// 2. ESP / TRANSFORM / PHYSICS TRACKING HOOKS
+// SIGNATURE BYPASS (best-effort — no confirmation of where the check lives)
+// ============================================================
+using CheckSigFn_t = bool (*)(Il2CppString*, Il2CppString*, const MethodInfo*);
+static CheckSigFn_t orig_CheckSignature = nullptr;
+
+static bool hook_CheckSignature(Il2CppString* a, Il2CppString* b, const MethodInfo* m) {
+    LOGI("[SIGBYPASS] signature check intercepted");
+    return true;
+}
+
+// ============================================================
+// ESP / TRANSFORM / PHYSICS HOOKS
 // ============================================================
 using TransformSetPos_t       = void (*)(void*, Vec3, const MethodInfo*);
 using TransformSetPosRot_t    = void (*)(void*, Vec3, Quat, const MethodInfo*);
@@ -219,7 +223,7 @@ static void hook_PositionUpdate(void* self, const MethodInfo* method) {
 }
 
 // ============================================================
-// 3. WEAPON / SILENT AIM / WALLPEN HOOKS
+// WEAPON HOOKS
 // ============================================================
 using WeaponOnUpdate_t    = void (*)(void*, const MethodInfo*);
 using RayCast7_t          = void* (*)(void*, Vec3, Vec3, float, int32_t, int32_t, void*, const MethodInfo*);
@@ -263,7 +267,7 @@ static bool hook_WallPenParams(void* self, void* mat, float* outLoss, float* out
 }
 
 // ============================================================
-// 4. CAMERA / FOV / FREECAM / SPECTATE HOOKS
+// CAMERA HOOKS
 // ============================================================
 using CameraSetFov_t   = void (*)(void*, float, const MethodInfo*);
 using CameraGetFov_t   = float (*)(void*, const MethodInfo*);
@@ -306,7 +310,7 @@ static void hook_SwitchListener(void* self, void* target, const MethodInfo* m) {
 }
 
 // ============================================================
-// 5. SKYWALK / GODMODE / FALL DAMAGE / HEAD ENLARGE HOOKS
+// SKYWALK / GODMODE / FALL HOOKS
 // ============================================================
 using BoolGetter_t     = bool (*)(void*, const MethodInfo*);
 using CanEnterState_t  = bool (*)(void*, void*, const MethodInfo*);
@@ -377,7 +381,7 @@ static bool hook_PedStateCanEnter(void* self, void* prev, const MethodInfo* m) {
 }
 
 // ============================================================
-// 6. HEALTH / FALL DAMAGE / HUD SLIDER HOOKS
+// HEALTH HOOKS
 // ============================================================
 using SliderSetVal_t   = void (*)(void*, float, const MethodInfo*);
 using ApplyFallDmg_t   = void (*)(void*, float, const MethodInfo*);
@@ -390,18 +394,10 @@ static SliderSetVal_t orig_SliderSetSilent = nullptr;
 static ApplyFallDmg_t orig_ApplyLocalFall  = nullptr;
 static TakeDamage_t   orig_TakeDamage      = nullptr;
 
-static void hook_ElemHealthSync(void* self, const MethodInfo* m) {
-    if (orig_ElemHealthSync) orig_ElemHealthSync(self, m);
-}
-static void hook_HudHealthView(void* self, const MethodInfo* m) {
-    if (orig_HudHealthView) orig_HudHealthView(self, m);
-}
-static void hook_SliderSetVal(void* self, float v, const MethodInfo* m) {
-    if (orig_SliderSetVal) orig_SliderSetVal(self, v, m);
-}
-static void hook_SliderSetSilent(void* self, float v, const MethodInfo* m) {
-    if (orig_SliderSetSilent) orig_SliderSetSilent(self, v, m);
-}
+static void hook_ElemHealthSync(void* self, const MethodInfo* m) { if (orig_ElemHealthSync) orig_ElemHealthSync(self, m); }
+static void hook_HudHealthView(void* self, const MethodInfo* m)  { if (orig_HudHealthView) orig_HudHealthView(self, m); }
+static void hook_SliderSetVal(void* self, float v, const MethodInfo* m)     { if (orig_SliderSetVal) orig_SliderSetVal(self, v, m); }
+static void hook_SliderSetSilent(void* self, float v, const MethodInfo* m)  { if (orig_SliderSetSilent) orig_SliderSetSilent(self, v, m); }
 static void hook_ApplyLocalFall(void* self, float dmg, const MethodInfo* m) {
     if (F.godMode.load(std::memory_order_relaxed) ||
         F.noFallDamage.load(std::memory_order_relaxed) ||
@@ -416,7 +412,7 @@ static void hook_TakeDamage(void* self, float amount, const MethodInfo* m) {
 }
 
 // ============================================================
-// 7. SPEED / WALKONAIR / AUTOWALK / NAVGRAPH HOOKS
+// MOVEMENT / NAV HOOKS
 // ============================================================
 using GetVelocity_t = Vec3 (*)(void*, const MethodInfo*);
 using NavFindPath_t = bool (*)(void*, Vec3, Vec3, void*, const MethodInfo*);
@@ -424,7 +420,6 @@ using NavVecOp_t    = void (*)(void*, Vec3, const MethodInfo*);
 
 static GetVelocity_t orig_GetVelocity    = nullptr;
 static VoidUpdate_t  orig_PhysicsFixed   = nullptr;
-static VoidUpdate_t  orig_PhysicsWoaUpd  = nullptr;
 static VoidUpdate_t  orig_PedViewInputs  = nullptr;
 static NavFindPath_t orig_NavFindPath    = nullptr;
 static VoidUpdate_t  orig_NavCtor        = nullptr;
@@ -443,7 +438,6 @@ static Vec3 hook_GetVelocity(void* self, const MethodInfo* m) {
     return v;
 }
 static void hook_PhysicsFixed(void* self, const MethodInfo* m)   { if (orig_PhysicsFixed) orig_PhysicsFixed(self, m); }
-static void hook_PhysicsWoaUpd(void* self, const MethodInfo* m)  { if (orig_PhysicsWoaUpd) orig_PhysicsWoaUpd(self, m); }
 static void hook_PedViewInputs(void* self, const MethodInfo* m)  { if (orig_PedViewInputs) orig_PedViewInputs(self, m); }
 static bool hook_NavFindPath(void* self, Vec3 a, Vec3 b, void* outList, const MethodInfo* m) {
     return orig_NavFindPath ? orig_NavFindPath(self, a, b, outList, m) : false;
@@ -467,7 +461,7 @@ static void hook_NavAddMarker(void* self, Vec3 p, const MethodInfo* m) {
 }
 
 // ============================================================
-// 8. CLOTHES / VEHICLES / STAMINA HOOKS
+// CLOTHES / STAMINA HOOKS
 // ============================================================
 using SetStaminaLose_t = void (*)(void*, bool, const MethodInfo*);
 
@@ -494,15 +488,14 @@ static void hook_PedStaminaSystem(void* self, const MethodInfo* m) {
 }
 
 // ============================================================
-// 9. DAYNIGHT & RANGE CULLING HOOKS
+// DAYNIGHT & RANGE CULLING
 // ============================================================
-static VoidUpdate_t orig_SkyDriverLate   = nullptr;
-static VoidUpdate_t orig_RangeCull[5]    = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static VoidUpdate_t orig_SkyDriverLate = nullptr;
+static VoidUpdate_t orig_RangeCull[5]  = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
 static void hook_SkyDriverLate(void* self, const MethodInfo* m) {
     if (orig_SkyDriverLate) orig_SkyDriverLate(self, m);
 }
-
 template <int Idx>
 static void hook_RangeCull(void* self, const MethodInfo* m) {
     if (F.extendedRange.load(std::memory_order_relaxed)) return;
@@ -516,63 +509,38 @@ static bool safeHook(Il2CppClass* klass, const char* methodName, int args,
                      void* replaceFn, void** outOrig,
                      uintptr_t libBase, uintptr_t libEnd, const char* label) {
     F.hooksTotal.fetch_add(1, std::memory_order_relaxed);
-    if (!klass || !methodName || !replaceFn || !outOrig || !il2cpp.class_get_method) {
-        return false;
-    }
+    if (!klass || !methodName || !replaceFn || !outOrig || !il2cpp.class_get_method) return false;
 
     const Il2CppMethod* m = nullptr;
-    GUARDED_RUN(label, {
-        m = il2cpp.class_get_method(klass, methodName, args);
-    });
+    GUARDED_RUN(label, { m = il2cpp.class_get_method(klass, methodName, args); });
     if (!m) {
         LOGI("[hook] %s: '%s'(%d) not found", label, methodName, args);
         return false;
     }
-
     void* ptr = Il2CppApi::methodPointer(m);
-    if (!ptr) {
-        LOGE("[hook] %s: '%s' null ptr", label, methodName);
-        return false;
-    }
+    if (!ptr) { LOGE("[hook] %s: '%s' null ptr", label, methodName); return false; }
     uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
     if (addr < libBase || addr >= libEnd) {
-        LOGE("[hook] %s: '%s' %p outside libil2cpp.so", label, methodName, ptr);
+        LOGE("[hook] %s: '%s' %p outside lib", label, methodName, ptr);
         return false;
     }
 #if defined(__aarch64__)
-    if ((addr & 3u) != 0) {
-        LOGE("[hook] %s: unaligned ARM64 addr %p", label, ptr);
-        return false;
-    }
-    // Guard against tiny <=12-byte getter/return stubs that cannot fit a 16-byte trampoline
+    if ((addr & 3u) != 0) { LOGE("[hook] %s: unaligned ARM64 addr %p", label, ptr); return false; }
     const uint32_t* insns = reinterpret_cast<const uint32_t*>(ptr);
     if (insns[0] == 0xd65f03c0u || insns[1] == 0xd65f03c0u || insns[2] == 0xd65f03c0u) {
-        LOGI("[hook] %s: '%s' stub <=12B, skipped safely", label, methodName);
+        LOGI("[hook] %s: '%s' stub <=12B, skipped", label, methodName);
         return false;
     }
 #endif
-
 #if USE_A64_HOOK
     *outOrig = nullptr;
-    GUARDED_RUN(label, {
-        A64HookFunction(ptr, replaceFn, outOrig);
-    });
-    if (*outOrig == nullptr) {
-        LOGE("[hook] %s: A64HookFunction('%s') failed", label, methodName);
-        return false;
-    }
+    GUARDED_RUN(label, { A64HookFunction(ptr, replaceFn, outOrig); });
+    if (*outOrig == nullptr) { LOGE("[hook] %s: A64HookFunction failed for '%s'", label, methodName); return false; }
 #else
     int rc = -1;
-    GUARDED_RUN(label, {
-        rc = DobbyHook(ptr, replaceFn, outOrig);
-    });
-    if (rc != 0) {
-        *outOrig = nullptr;
-        LOGE("[hook] %s: DobbyHook('%s') failed rc=%d", label, methodName, rc);
-        return false;
-    }
+    GUARDED_RUN(label, { rc = DobbyHook(ptr, replaceFn, outOrig); });
+    if (rc != 0) { *outOrig = nullptr; LOGE("[hook] %s: DobbyHook failed '%s' rc=%d", label, methodName, rc); return false; }
 #endif
-
     F.hooksInstalled.fetch_add(1, std::memory_order_relaxed);
     LOGI("[hook] %s: hooked '%s' @ %p", label, methodName, ptr);
     return true;
@@ -582,9 +550,7 @@ static size_t safeFieldOffset(Il2CppClass* klass, const char* fieldName) {
     if (!klass || !fieldName || !il2cpp.class_get_field || !il2cpp.field_get_offset) return 0;
     size_t off = 0;
     GUARDED_RUN(fieldName, {
-        if (auto* f = il2cpp.class_get_field(klass, fieldName)) {
-            off = il2cpp.field_get_offset(f);
-        }
+        if (auto* f = il2cpp.class_get_field(klass, fieldName)) off = il2cpp.field_get_offset(f);
     });
     return off;
 }
@@ -598,18 +564,18 @@ static void* waitForIl2Cpp(int timeoutSeconds = 90) {
     const int attempts = timeoutSeconds * 2;
     for (int i = 0; i < attempts; i++) {
         uintptr_t base = 0, end = 0;
-        if (KittyMemory::getLibraryRange("libil2cpp.so", base, end)) {
-            void* handle = dlopen("libil2cpp.so", RTLD_NOLOAD | RTLD_NOW);
+        if (KittyMemory::getLibraryRange(kIl2CppLibName, base, end)) {
+            void* handle = dlopen(kIl2CppLibName, RTLD_NOLOAD | RTLD_NOW);
             if (handle) {
                 g_libBase.store(base, std::memory_order_relaxed);
                 g_libEnd.store(end, std::memory_order_relaxed);
-                LOGI("[init] libil2cpp.so mapped 0x%" PRIxPTR "-0x%" PRIxPTR, base, end);
+                LOGI("[init] %s mapped 0x%" PRIxPTR "-0x%" PRIxPTR, kIl2CppLibName, base, end);
                 return handle;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
-    LOGE("[init] libil2cpp.so timeout after %ds", timeoutSeconds);
+    LOGE("[init] %s timeout after %ds", kIl2CppLibName, timeoutSeconds);
     return nullptr;
 }
 
@@ -624,18 +590,14 @@ static Il2CppDomain* waitForDomain(int timeoutSeconds = 30) {
     return nullptr;
 }
 
-// Lookup helper trying fullName first, then bare class name across all assemblies
 static Il2CppClass* findClassSafe(Il2CppDomain* domain, const char* fullName) {
     if (!domain || !fullName) return nullptr;
     Il2CppClass* k = nullptr;
-    GUARDED_RUN(fullName, {
-        k = il2cpp.findClass(fullName);
-    });
+    GUARDED_RUN(fullName, { k = il2cpp.findClass(fullName); });
     return k;
 }
 
 static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t libEnd) {
-    // --- 0. Fallback generic Position / Health ---
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.UnityViewFeature.Components.Position")) {
         const char* cands[] = {"Update", "OnUpdate", "Execute", "UpdatePosition", "SetPosition"};
         for (const char* m : cands) {
@@ -646,22 +608,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "TakeDamage", 1, (void*)hook_TakeDamage, (void**)&orig_TakeDamage, libBase, libEnd, "Health.TakeDamage");
     }
 
-    // --- 1. SR-SPOOF ---
-    if (auto* k = findClassSafe(domain, "UnityEngine.SystemInfo")) {
-        safeHook(k, "get_deviceUniqueIdentifier", 0, (void*)hook_GetDeviceUniqueId, (void**)&orig_GetDeviceUniqueId, libBase, libEnd, "SystemInfo.DeviceId");
-    }
-    if (auto* k = findClassSafe(domain, "dev.Scripts.GameScripts.Authorization.SpecificWindows.AuthorizationMetaModel")) {
-        g_offExtReal = safeFieldOffset(k, "ExtendedDeviceIdReal");
-        g_offExtGen  = safeFieldOffset(k, "ExtendedDeviceIdGenerated");
-        g_offAdvId   = safeFieldOffset(k, "AdvertisingId");
-        safeHook(k, "FromDevice", -1, (void*)hook_AuthFromDevice, (void**)&orig_AuthFromDevice, libBase, libEnd, "Auth.FromDevice");
-        safeHook(k, "FillSelfExtended", 0, (void*)hook_AuthFillExtended, (void**)&orig_AuthFillExtended, libBase, libEnd, "Auth.FillSelfExtended");
-    }
-    if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.SettingsFeature.Systems.SettingsServiceSystem")) {
-        safeHook(k, "GetDeviceId", 0, (void*)hook_SettingsGetDeviceId, (void**)&orig_SettingsGetDevId, libBase, libEnd, "Settings.GetDeviceId");
-    }
-
-    // --- 2. ESP / Transform / Physics ---
+    // 2. ESP / Transform / Physics
     if (auto* k = findClassSafe(domain, "UnityEngine.Transform")) {
         safeHook(k, "set_position", 1, (void*)hook_TransformSetPos, (void**)&orig_TransformSetPos, libBase, libEnd, "Transform.set_position");
         safeHook(k, "set_localPosition", 1, (void*)hook_TransformSetLocalPos, (void**)&orig_TransformSetLocalPos, libBase, libEnd, "Transform.set_localPosition");
@@ -671,13 +618,12 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "Update", 0, (void*)hook_PhysicsActorUpdate, (void**)&orig_PhysicsActorUpdate, libBase, libEnd, "PhysicsActor.Update");
         safeHook(k, "get_Velocity", 0, (void*)hook_GetVelocity, (void**)&orig_GetVelocity, libBase, libEnd, "PhysicsActor.get_Velocity");
         safeHook(k, "FixedUpdate", 0, (void*)hook_PhysicsFixed, (void**)&orig_PhysicsFixed, libBase, libEnd, "PhysicsActor.FixedUpdate");
-        safeHook(k, "Update", 0, (void*)hook_PhysicsWoaUpd, (void**)&orig_PhysicsWoaUpd, libBase, libEnd, "PhysicsActor.Update(woa)");
     }
     if (auto* k = findClassSafe(domain, "Lightbug.CharacterControllerPro.Core.PhysicsActorSync")) {
         safeHook(k, "FixedUpdate", 0, (void*)hook_PhysicsSyncFixed, (void**)&orig_PhysicsSyncFixed, libBase, libEnd, "PhysicsActorSync.FixedUpdate");
     }
 
-    // --- 3. Weapon / SilentAim / WallPen ---
+    // 3. Weapon
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.WeaponFeature.Systems.WeaponProduceAttackRangedSystem")) {
         safeHook(k, "RayCastAttackRanged", 7, (void*)hook_RayCast7, (void**)&orig_RayCast7, libBase, libEnd, "RayCastAttackRanged.7");
         safeHook(k, "RayCastAttackRanged", 8, (void*)hook_RayCast8, (void**)&orig_RayCast8, libBase, libEnd, "RayCastAttackRanged.8");
@@ -687,7 +633,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "TryGetPenetrationDistance", -1, (void*)hook_WallPenDist, (void**)&orig_WallPenDist, libBase, libEnd, "WallPen.TryGetPenDist");
     }
 
-    // --- 4. Camera / FOV / FreeCam / Spectate ---
+    // 4. Camera
     if (auto* k = findClassSafe(domain, "UnityEngine.Camera")) {
         safeHook(k, "set_fieldOfView", 1, (void*)hook_CameraSetFov, (void**)&orig_CameraSetFov, libBase, libEnd, "Camera.set_fieldOfView");
         safeHook(k, "get_fieldOfView", 0, (void*)hook_CameraGetFov, (void**)&orig_CameraGetFov, libBase, libEnd, "Camera.get_fieldOfView");
@@ -708,7 +654,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "SwitchListener", 1, (void*)hook_SwitchListener, (void**)&orig_SwitchListener, libBase, libEnd, "SoundFmod.SwitchListener");
     }
 
-    // --- 5. SkyWalk / GodMode / FallDamage / Head ---
+    // 5. SkyWalk
     if (auto* k = findClassSafe(domain, "Lightbug.CharacterControllerPro.Core.CharacterActor")) {
         safeHook(k, "Update", 0, (void*)hook_CharActorUpdate, (void**)&orig_CharActorUpdate, libBase, libEnd, "SkyWalk.Update");
         safeHook(k, "PostSimulationUpdate", 1, (void*)hook_CharActorPostSim, (void**)&orig_CharActorPostSim, libBase, libEnd, "SkyWalk.PostSim");
@@ -738,7 +684,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "CanEnterState", 1, (void*)hook_PedStateCanEnter, (void**)&orig_PedStateCanEnter, libBase, libEnd, "SkyWalk.PedState");
     }
 
-    // --- 6. Health / HUD Sliders / FallDamage ---
+    // 6. Health
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.ElementsFeature.Systems.ElementHealthSyncSystem")) {
         safeHook(k, "OnUpdate", -1, (void*)hook_ElemHealthSync, (void**)&orig_ElemHealthSync, libBase, libEnd, "ElementHealthSync.OnUpdate");
     } else if (auto* k2 = findClassSafe(domain, "ElementHealthSyncSystem")) {
@@ -755,7 +701,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "ApplyLocalFallDamage", 1, (void*)hook_ApplyLocalFall, (void**)&orig_ApplyLocalFall, libBase, libEnd, "FallDamage.Apply");
     }
 
-    // --- 7. AutoWalk / NavigationGraph ---
+    // 7. Navigation / AutoWalk
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.PedViewFeature.Systems.PedViewInputsSystem")) {
         if (!safeHook(k, "update", -1, (void*)hook_PedViewInputs, (void**)&orig_PedViewInputs, libBase, libEnd, "PedViewInputsSystem.update")) {
             safeHook(k, "OnUpdate", -1, (void*)hook_PedViewInputs, (void**)&orig_PedViewInputs, libBase, libEnd, "PedViewInputsSystem.OnUpdate");
@@ -770,7 +716,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "AddMarker", 1, (void*)hook_NavAddMarker, (void**)&orig_NavAddMarker, libBase, libEnd, "NavGraph.AddMarker");
     }
 
-    // --- 8. CLSV-HOOKS & CarFeatures ---
+    // 8. Clothes / Stamina
     if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.PedsFeature.Systems.Streaming.PedLoadClothesSystem")) {
         safeHook(k, "OnUpdate", -1, (void*)hook_PedLoadClothes, (void**)&orig_PedLoadClothes, libBase, libEnd, "PedLoadClothes.OnUpdate");
     }
@@ -793,7 +739,7 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
         safeHook(k, "OnUpdate", -1, (void*)hook_PedStaminaSystem, (void**)&orig_PedStaminaSystem, libBase, libEnd, "CarFeatures.PedStamina");
     }
 
-    // --- 9. DAYNIGHT & SR-RANGE ---
+    // 9. DayNight & Range
     if (auto* k = findClassSafe(domain, "SkyLightingDriver")) {
         safeHook(k, "LateUpdate", 0, (void*)hook_SkyDriverLate, (void**)&orig_SkyDriverLate, libBase, libEnd, "SkyDriver.LateUpdate");
     }
@@ -814,6 +760,24 @@ static void installAllHooks(Il2CppDomain* domain, uintptr_t libBase, uintptr_t l
             safeHook(k, "OnUpdate", -1, rangeFns[i], (void**)&orig_RangeCull[i], libBase, libEnd, rangeClasses[i]);
         }
     }
+
+    // 10. SIGNATURE BYPASS (best-effort — covers common names; if the game uses
+    // a different one, none of these match and nothing is hooked. Not a real
+    // bypass — a placeholder until global-metadata.dat is dumped and the actual
+    // verification method is located.)
+    const char* sigClasses[] = {
+        "SignatureVerifier", "AppIntegrity", "SecurityCheck", "LicenseValidator",
+        "com.mycompany.application.SignatureCheck"
+    };
+    for (auto* cn : sigClasses) {
+        if (auto* k = findClassSafe(domain, cn)) {
+            const char* methods[] = {"Check", "Verify", "Validate", "IsValid", "CheckSignature"};
+            for (auto* mn : methods) {
+                if (safeHook(k, mn, -1, (void*)hook_CheckSignature,
+                             (void**)&orig_CheckSignature, libBase, libEnd, cn)) break;
+            }
+        }
+    }
 }
 
 namespace Offsets {
@@ -828,30 +792,18 @@ static bool installHooksSafely() {
     try {
         if (isSafeModeFilePresent()) {
             F.safeMode.store(true, std::memory_order_relaxed);
-            LOGI("[SR-SAFE] Safe mode file detected - hooks skipped");
+            LOGI("[SR-SAFE] safe mode — hooks skipped");
             return false;
         }
-
         void* handle = waitForIl2Cpp();
         if (!handle) return false;
-
         std::this_thread::sleep_for(std::chrono::seconds(3));
-
-        if (!il2cpp.init(handle)) {
-            LOGE("[init] il2cpp.init FAILED");
-            return false;
-        }
-
+        if (!il2cpp.init(handle)) { LOGE("[init] il2cpp.init FAILED"); return false; }
         Il2CppDomain* domain = waitForDomain();
         if (!domain) return false;
-
         if (il2cpp.thread_attach) {
-            GUARDED_RUN("thread_attach", {
-                il2cpp.thread_attach(domain);
-            });
+            GUARDED_RUN("thread_attach", { il2cpp.thread_attach(domain); });
         }
-
-        // Wait briefly for main game assemblies to finish registering
         for (int i = 0; i < 20; i++) {
             if (findClassSafe(domain, "Lightbug.CharacterControllerPro.Core.PhysicsActor") ||
                 findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.UnityViewFeature.Components.Position")) {
@@ -859,11 +811,9 @@ static bool installHooksSafely() {
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
-
         uintptr_t base = g_libBase.load(std::memory_order_relaxed);
         uintptr_t end  = g_libEnd.load(std::memory_order_relaxed);
         installAllHooks(domain, base, end);
-
         bool ok = F.hooksInstalled.load(std::memory_order_relaxed) > 0;
         F.hooked.store(ok, std::memory_order_relaxed);
         LOGI("[init] hooks installed: %d / %d (faults=%d)",
@@ -875,12 +825,50 @@ static bool installHooksSafely() {
     }
 }
 
-// Low-overhead patch loop: uses cached base address (no /proc/self/maps polling!)
+static void installSpoofHooksIfNeeded(uintptr_t libBase, uintptr_t libEnd) {
+    if (F.spoofHooksInstalled.load(std::memory_order_relaxed) ||
+        !F.deviceSpoof.load(std::memory_order_relaxed) ||
+        !F.hooked.load(std::memory_order_relaxed) ||
+        !il2cpp.ok || !libBase || !libEnd) {
+        return;
+    }
+    bool expected = false;
+    if (!F.spoofHooksInstalled.compare_exchange_strong(expected, true)) return;
+    Il2CppDomain* domain = il2cpp.domain_get ? il2cpp.domain_get() : nullptr;
+    if (!domain) { F.spoofHooksInstalled.store(false, std::memory_order_relaxed); return; }
+    if (auto* k = findClassSafe(domain, "UnityEngine.SystemInfo")) {
+        safeHook(k, "get_deviceUniqueIdentifier", 0, (void*)hook_GetDeviceUniqueId, (void**)&orig_GetDeviceUniqueId, libBase, libEnd, "SystemInfo.DeviceId");
+    }
+    if (auto* k = findClassSafe(domain, "dev.Scripts.GameScripts.Authorization.SpecificWindows.AuthorizationMetaModel")) {
+        g_offExtReal = safeFieldOffset(k, "ExtendedDeviceIdReal");
+        g_offExtGen  = safeFieldOffset(k, "ExtendedDeviceIdGenerated");
+        g_offAdvId   = safeFieldOffset(k, "AdvertisingId");
+        const Il2CppMethod* fm = nullptr;
+        GUARDED_RUN("Auth.FromDevice.probe", { fm = il2cpp.class_get_method(k, "FromDevice", -1); });
+        uint32_t pcnt = (fm && il2cpp.method_get_param_count) ? il2cpp.method_get_param_count(fm) : 99;
+        if (pcnt <= 2) {
+            safeHook(k, "FromDevice", static_cast<int>(pcnt), (void*)hook_AuthFromDevice, (void**)&orig_AuthFromDevice, libBase, libEnd, "Auth.FromDevice");
+        } else {
+            LOGI("[hook] Auth.FromDevice: paramCount=%u skipped for ABI safety", pcnt);
+        }
+        safeHook(k, "FillSelfExtended", 0, (void*)hook_AuthFillExtended, (void**)&orig_AuthFillExtended, libBase, libEnd, "Auth.FillSelfExtended");
+    }
+    if (auto* k = findClassSafe(domain, "dev.Scripts.ECS.Morpeh.Features.SettingsFeature.Systems.SettingsServiceSystem")) {
+        safeHook(k, "GetDeviceId", 0, (void*)hook_SettingsGetDeviceId, (void**)&orig_SettingsGetDevId, libBase, libEnd, "Settings.GetDeviceId");
+    }
+}
+
 static void patchLoop() {
     constexpr bool hasAnyOffset = (Offsets::InfiniteAmmo || Offsets::NoRecoil ||
                                    Offsets::VehicleSpeed || Offsets::CameraFov);
     while (true) {
         uintptr_t base = g_libBase.load(std::memory_order_relaxed);
+        uintptr_t end  = g_libEnd.load(std::memory_order_relaxed);
+        if (base && end && F.deviceSpoof.load(std::memory_order_relaxed) &&
+            !F.spoofHooksInstalled.load(std::memory_order_relaxed) &&
+            !F.safeMode.load(std::memory_order_relaxed)) {
+            installSpoofHooksIfNeeded(base, end);
+        }
         if (base && hasAnyOffset) {
             GUARDED_RUN("patchLoop", {
                 if (F.infiniteAmmo.load(std::memory_order_relaxed) && Offsets::InfiniteAmmo)
@@ -894,8 +882,7 @@ static void patchLoop() {
             });
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         } else {
-            // Sleep longer when no raw offsets are active -> zero CPU/lag
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     }
 }
@@ -907,7 +894,7 @@ static void hackThread() {
 }
 
 // ============================================================
-// JNI BRIDGE (com.bonika.modmenu.NativeBridge)
+// JNI BRIDGE — com.bonika.modmenu.NativeBridge
 // ============================================================
 #define JNI_FN(name) Java_com_bonika_modmenu_NativeBridge_##name
 extern "C" {
@@ -964,6 +951,56 @@ JNIEXPORT jfloatArray JNICALL JNI_FN(getPlayerPosition)(JNIEnv* env, jclass) {
     float xyz[3] = {F.playerPos.x, F.playerPos.y, F.playerPos.z};
     env->SetFloatArrayRegion(a, 0, 3, xyz);
     return a;
+}
+
+// q.dat decryption via SilkGuard.open(byte[]) → byte[]
+JNIEXPORT jbyteArray JNICALL JNI_FN(decryptQDat)(JNIEnv* env, jclass, jstring jpath) {
+    if (!env || !jpath) return nullptr;
+    const char* path = env->GetStringUTFChars(jpath, nullptr);
+    if (!path) return nullptr;
+    FILE* f = fopen(path, "rb");
+    env->ReleaseStringUTFChars(jpath, path);
+    if (!f) {
+        LOGE("[decryptQDat] cannot open file");
+        return nullptr;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz > 4 * 1024 * 1024) {
+        fclose(f);
+        LOGE("[decryptQDat] bad size %ld", sz);
+        return nullptr;
+    }
+    std::vector<uint8_t> data(static_cast<size_t>(sz));
+    if (fread(data.data(), 1, sz, f) != (size_t)sz) {
+        fclose(f);
+        return nullptr;
+    }
+    fclose(f);
+
+    jclass cls = env->FindClass("com/silk/guard/SilkGuard");
+    if (!cls) {
+        env->ExceptionClear();
+        LOGE("[decryptQDat] SilkGuard class not found");
+        return nullptr;
+    }
+    jmethodID m = env->GetStaticMethodID(cls, "open", "([B)[B");
+    if (!m) {
+        env->ExceptionClear();
+        LOGE("[decryptQDat] SilkGuard.open([B)[B] not found");
+        return nullptr;
+    }
+    jbyteArray arr = env->NewByteArray(sz);
+    env->SetByteArrayRegion(arr, 0, sz, reinterpret_cast<jbyte*>(data.data()));
+    jbyteArray plain = reinterpret_cast<jbyteArray>(env->CallStaticObjectMethod(cls, m, arr));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        LOGE("[decryptQDat] SilkGuard.open threw");
+        plain = nullptr;
+    }
+    env->DeleteLocalRef(arr);
+    return plain;
 }
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM*, void*) {
