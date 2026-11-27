@@ -1,17 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.mycompany.application">
+
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    <application android:label="Mod Menu" android:theme="@android:style/Theme.Material">
-        <activity android:name="com.bonika.modmenu.MainActivity" android:exported="true">
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <application
+        android:label="Mod Menu"
+        android:theme="@android:style/Theme.Material"
+        android:usesCleartextTraffic="true">
+
+        <!-- Game's launcher activity — name must match the game's actual MainActivity.
+             Add additional activities/permissions/providers from the game's manifest here. -->
+        <activity
+            android:name="com.mycompany.application.MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <service android:name="com.bonika.modmenu.FloatingService"
-                 android:enabled="true" android:exported="false"
-                 android:foregroundServiceType="specialUse"/>
+
+        <!-- Our boot provider runs BEFORE everything else (initOrder=1) -->
+        <provider
+            android:name="com.bonika.modmenu.BootProvider"
+            android:authorities="com.mycompany.application.modmenu.boot"
+            android:exported="false"
+            android:initOrder="1"/>
+
+        <!-- SilkGuard init runs LAST (unchanged semantics from original) -->
+        <provider
+            android:name="com.bonika.modmenu.GuardInitProvider"
+            android:authorities="com.mycompany.application.guardinit"
+            android:exported="false"
+            android:initOrder="2147483647"/>
+
+        <!-- Our floating overlay service -->
+        <service
+            android:name="com.bonika.modmenu.FloatingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"/>
+
     </application>
 </manifest>
