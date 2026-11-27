@@ -1,28 +1,31 @@
 package com.bonika.modmenu;
 
-public class NativeBridge {
+public final class NativeBridge {
     private static volatile boolean loaded = false;
+    private static volatile boolean loadAttempted = false;
 
-    static {
+    private NativeBridge() {}
+
+    public static synchronized void load() {
+        if (loadAttempted) return;
+        loadAttempted = true;
         try {
             System.loadLibrary("modmenu");
             loaded = true;
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
             loaded = false;
         }
     }
 
     public static boolean isLibraryLoaded() { return loaded; }
 
-    // PLAYER / ESP
     public static native void setEspEnabled(boolean v);
-    public static native void setEspDistance(float meters);
+    public static native void setEspDistance(float v);
     public static native void setSkeletonEsp(boolean v);
     public static native void setShowNpcs(boolean v);
     public static native void setShowVehicles(boolean v);
-    public static native void setEspBoxColor(int argb);
+    public static native void setEspBoxColor(int v);
 
-    // COMBAT & PROTECTION
     public static native void setGodMode(boolean v);
     public static native void setInfiniteAmmo(boolean v);
     public static native void setRapidFire(boolean v);
@@ -31,7 +34,6 @@ public class NativeBridge {
     public static native void setBulletWallhack(boolean v);
     public static native void setNoFallDamage(boolean v);
 
-    // MOVEMENT & VEHICLE
     public static native void setVehicleSpeedEnabled(boolean v);
     public static native void setVehicleSpeedMultiplier(float v);
     public static native void setPlayerSpeedEnabled(boolean v);
@@ -43,7 +45,6 @@ public class NativeBridge {
     public static native void teleportToWaypoint();
     public static native void setInstantBrake(boolean v);
 
-    // VISUALS & CAMERA
     public static native void setFov(float v);
     public static native void setFovOverride(boolean v);
     public static native void setNightVision(boolean v);
@@ -53,14 +54,15 @@ public class NativeBridge {
     public static native void setHeadEnlarge(boolean v);
     public static native void setHeadScale(float v);
 
-    // SPOOFER & PROTECTION
     public static native void setDeviceSpoof(boolean v);
     public static native void regenerateSpoofId();
 
-    // TELEMETRY / STATE
-    public static native float[] getPlayerPosition();
     public static native boolean isHooked();
     public static native int getHooksInstalled();
     public static native int getHooksTotal();
     public static native int getFaultsRecovered();
+    public static native float[] getPlayerPosition();
+
+    /** Decrypt q.dat (or any file) via SilkGuard.open(byte[]). Returns null on failure. */
+    public static native byte[] decryptQDat(String path);
 }
