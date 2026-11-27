@@ -3,11 +3,11 @@ android {
     namespace 'com.bonika.modmenu'
     compileSdk 34
     defaultConfig {
-        applicationId "com.bonika.modmenu"
+        applicationId "com.mycompany.application"
         minSdk 26
         targetSdk 34
         versionCode 1
-        versionName "7.0-pro"
+        versionName "8.0-pro"
         multiDexEnabled false
         ndk { abiFilters 'arm64-v8a' }
     }
