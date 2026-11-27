@@ -1,5 +1,4 @@
 #pragma once
-// Runtime-resolved Il2Cpp API via dlsym(RTLD_NOLOAD) from libil2cpp.so
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -80,7 +79,6 @@ struct Il2CppApi {
         class_get_type         = reinterpret_cast<il2cpp_class_get_type_t>(sym("il2cpp_class_get_type"));
         class_get_name         = reinterpret_cast<il2cpp_class_get_name_t>(sym("il2cpp_class_get_name"));
         ok = domain_get && domain_get_assemblies && assembly_get_image && class_from_name && class_get_method;
-        IL_LOG("Il2CppApi init ok=%d", ok ? 1 : 0);
         return ok;
     }
 
