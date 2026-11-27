@@ -17,15 +17,13 @@ import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.*;
 
-/**
- * MenuOverlay v7 — boha xvip (Ultra-smooth animations, throttled zero-lag drag,
- * hardware layers, crash-safe JNI calls, full libdatastore_shared hook toggles)
- */
 public class MenuOverlay {
     static final int BG = 0xF50A0A0C, PANEL = 0xFF111114, SIDEBAR = 0xFF0D0D10,
             CARD = 0xFF17171B, STROKE = 0xFF26262C, TRACK = 0xFF2A2A30,
             RED = 0xFFE8112D, RED2 = 0xFFFF1E3C, TEXT = 0xFFFFFFFF,
             MUTED = 0xFF9A9AA3, GREEN = 0xFF3BFF7A;
+
+    public static volatile String silkStatus = "OK";
 
     private final Context ctx;
     private final WindowManager wm;
@@ -77,9 +75,7 @@ public class MenuOverlay {
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                   | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                   | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
-        if (prefs.getBoolean("hideRec", false)) {
-            flags |= WindowManager.LayoutParams.FLAG_SECURE;
-        }
+        if (prefs.getBoolean("hideRec", false)) flags |= WindowManager.LayoutParams.FLAG_SECURE;
         return flags;
     }
 
@@ -169,9 +165,7 @@ public class MenuOverlay {
         uiHandler.postDelayed(statusTicker, 1500);
     }
 
-    private void stopStatusTicker() {
-        uiHandler.removeCallbacks(statusTicker);
-    }
+    private void stopStatusTicker() { uiHandler.removeCallbacks(statusTicker); }
 
     private void updateStatusText() {
         if (statusLabel == null) return;
@@ -185,10 +179,10 @@ public class MenuOverlay {
             int flt = NativeBridge.getFaultsRecovered();
             if (inst > 0) {
                 statusLabel.setText(flt > 0
-                        ? String.format("Status : Ready (%d/%d hooks | %d shielded)", inst, tot, flt)
-                        : String.format("Status : Ready (%d/%d hooks)", inst, tot));
+                        ? String.format("Ready (%d/%d | %d flt) | %s", inst, tot, flt, silkStatus)
+                        : String.format("Ready (%d/%d) | %s", inst, tot, silkStatus));
             } else {
-                statusLabel.setText("Status : Waiting for libil2cpp…");
+                statusLabel.setText("Waiting il2cpp | " + silkStatus);
             }
         } catch (Throwable ignored) {}
     }
@@ -278,7 +272,6 @@ public class MenuOverlay {
         panel.setPadding(dp(12), dp(10), dp(12), dp(10));
         root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
 
-        // ----- header (drag handle) -----
         LinearLayout header = new LinearLayout(ctx);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -310,7 +303,7 @@ public class MenuOverlay {
         subRow.setPadding(0, dp(1), 0, 0);
         TextView mod = label("MOD MENU  ", 9, MUTED);
         mod.setTypeface(Typeface.DEFAULT_BOLD);
-        TextView ver = label("v7.0 PRO", 9, RED2);
+        TextView ver = label("v8.0 PRO", 9, RED2);
         ver.setTypeface(Typeface.DEFAULT_BOLD);
         subRow.addView(mod);
         subRow.addView(ver);
@@ -347,7 +340,6 @@ public class MenuOverlay {
         sep.setBackgroundColor(STROKE);
         panel.addView(sep);
 
-        // ----- middle: sidebar + content -----
         LinearLayout middle = new LinearLayout(ctx);
         middle.setOrientation(LinearLayout.HORIZONTAL);
         middle.setPadding(0, dp(8), 0, dp(8));
@@ -430,7 +422,6 @@ public class MenuOverlay {
         brand.setGravity(Gravity.CENTER);
         sidebar.addView(brand);
 
-        // ----- footer -----
         View sep2 = new View(ctx);
         sep2.setLayoutParams(new LinearLayout.LayoutParams(-1, Math.max(1, dp(0.7f))));
         sep2.setBackgroundColor(STROKE);
@@ -465,7 +456,6 @@ public class MenuOverlay {
         footer.addView(reset);
         panel.addView(footer);
 
-        // ----- resize grip -----
         TextView grip = label("◢", 15, RED2);
         grip.setGravity(Gravity.CENTER);
         FrameLayout.LayoutParams gLp = new FrameLayout.LayoutParams(dp(30), dp(30));
@@ -500,7 +490,6 @@ public class MenuOverlay {
         return t;
     }
 
-    // ---------- bubble (collapsed state) ----------
     private void buildBubble() {
         FrameLayout b = new FrameLayout(ctx);
         View inner = logoView(56);
@@ -569,7 +558,6 @@ public class MenuOverlay {
         }
     }
 
-    // ---------- zero-lag throttled drag ----------
     private void makeDraggable(final View v, final boolean isBubble) {
         v.setClickable(true);
         v.setOnTouchListener(new View.OnTouchListener() {
@@ -583,10 +571,7 @@ public class MenuOverlay {
                 if (pr == null) return false;
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
-                        if (isBubble && snapAnimator != null) {
-                            snapAnimator.cancel();
-                            snapAnimator = null;
-                        }
+                        if (isBubble && snapAnimator != null) { snapAnimator.cancel(); snapAnimator = null; }
                         startX = pr.x;
                         startY = pr.y;
                         touchX = e.getRawX();
@@ -597,9 +582,7 @@ public class MenuOverlay {
                     case MotionEvent.ACTION_MOVE: {
                         int dx = (int) (e.getRawX() - touchX);
                         int dy = (int) (e.getRawY() - touchY);
-                        if (!dragging && (Math.abs(dx) + Math.abs(dy)) > dp(6)) {
-                            dragging = true;
-                        }
+                        if (!dragging && (Math.abs(dx) + Math.abs(dy)) > dp(6)) dragging = true;
                         if (dragging) {
                             int nx = clampDragX(startX + dx, pr.width, isBubble);
                             int ny = clampDragY(startY + dy);
@@ -641,11 +624,7 @@ public class MenuOverlay {
         if (isBubble) return clamp(x, 0, Math.max(0, screenW - w));
         return clamp(x, -w + dp(60), Math.max(0, screenW - dp(60)));
     }
-
-    private int clampDragY(int y) {
-        return clamp(y, 0, Math.max(0, screenH - dp(40)));
-    }
-
+    private int clampDragY(int y) { return clamp(y, 0, Math.max(0, screenH - dp(40))); }
     private void savePos(boolean isBubble, WindowManager.LayoutParams pr) {
         try {
             prefs.edit().putInt(isBubble ? "bubbleX" : "menuX", pr.x)
@@ -675,13 +654,11 @@ public class MenuOverlay {
         snapAnimator.start();
     }
 
-    // ---------- throttled resize grip ----------
     private void makeResizable(final View grip) {
         grip.setOnTouchListener(new View.OnTouchListener() {
             int startW, startH;
             float touchX, touchY;
             long lastUpdateNs = 0;
-
             public boolean onTouch(View view, MotionEvent e) {
                 if (params == null) return false;
                 switch (e.getActionMasked()) {
@@ -717,7 +694,6 @@ public class MenuOverlay {
         });
     }
 
-    // ---------- widgets ----------
     private LinearLayout page() {
         LinearLayout l = new LinearLayout(ctx);
         l.setOrientation(LinearLayout.VERTICAL);
@@ -937,7 +913,6 @@ public class MenuOverlay {
         return b;
     }
 
-    // ---------- HOME ----------
     private LinearLayout pageHome() {
         LinearLayout p = page();
         sectionHead(p, "Main Features", "Core mods & protection");
@@ -951,7 +926,6 @@ public class MenuOverlay {
         return p;
     }
 
-    // ---------- AIM / COMBAT ----------
     private LinearLayout pageAim() {
         LinearLayout p = page();
         sectionHead(p, "Aim / Combat", "Weapon & combat hooks");
@@ -966,7 +940,6 @@ public class MenuOverlay {
         return p;
     }
 
-    // ---------- VISUAL ----------
     private LinearLayout pageVisual() {
         LinearLayout p = page();
         sectionHead(p, "Visual", "ESP, camera, range & head");
@@ -1007,82 +980,88 @@ public class MenuOverlay {
             });
             colors.addView(sw);
         }
-        try { NativeBridge.setEspBoxColor(selected); } catch (Throwable ignored) {}
         colorCard.addView(colors);
         return p;
     }
 
-    // ---------- MOVEMENT & VEHICLE ----------
     private LinearLayout pageMisc() {
         LinearLayout p = page();
-        sectionHead(p, "Movement & Vehicle", "Physics, SkyWalk & stamina");
-        LinearLayout g = groupCard(p);
-        toggle(g, "skyWalk", "SkyWalk (Stay Grounded & Shoot)", false, NativeBridge::setSkyWalk);
-        toggle(g, "walkAir", "Walk On Air", false, NativeBridge::setWalkOnAir);
-        toggle(g, "autoWalk", "Auto Walk", false, NativeBridge::setAutoWalk);
-        toggle(g, "infStam", "Infinite Stamina", false, NativeBridge::setInfiniteStamina);
-        toggle(g, "plrSpeedOn", "Player Speed Hack", false, NativeBridge::setPlayerSpeedEnabled);
-        slider(g, "plrSpeed", "Player Speed", 1f, 8f, 1f, "x", NativeBridge::setPlayerSpeedMultiplier);
-        toggle(g, "vehSpeedOn", "Vehicle Speed Hack", false, NativeBridge::setVehicleSpeedEnabled);
-        slider(g, "vehSpeed", "Vehicle Multiplier", 1, 10, 1, "x", NativeBridge::setVehicleSpeedMultiplier);
-        toggle(g, "brake", "Instant Brake", false, NativeBridge::setInstantBrake);
+        sectionHead(p, "Movement", "Speed, stamina, teleport");
 
-        Button tp = styledButton("Teleport to Waypoint", true);
+        LinearLayout g = groupCard(p);
+        featureToggle(g, "skyWalk", "▲", "Sky Walk", "Freeze fall state, ignore gravity", false, NativeBridge::setSkyWalk);
+        featureToggle(g, "walkOnAir", "☁", "Walk On Air", "Force grounded=true", false, NativeBridge::setWalkOnAir);
+        featureToggle(g, "autoWalk", "↦", "Auto Walk", "Continuous forward input", false, NativeBridge::setAutoWalk);
+        featureToggle(g, "stamina", "❤", "Infinite Stamina", "Disables stamina drain", false, NativeBridge::setInfiniteStamina);
+
+        LinearLayout g2 = groupCard(p);
+        sectionHead(p, "Vehicle", "Speed and braking");
+        featureToggle(g2, "vehSpeedOn", "🚗", "Vehicle Speed", "Multiply vehicle velocity", false, NativeBridge::setVehicleSpeedEnabled);
+        featureSlider(g2, "vehSpeed", "↕", "Vehicle Multiplier", "Adjust drive multiplier", 1f, 10f, 1f, "x", NativeBridge::setVehicleSpeedMultiplier);
+        featureToggle(g2, "instBrake", "▣", "Instant Brake", "Zero velocity on brake", false, NativeBridge::setInstantBrake);
+
+        Button tp = styledButton("📍 Teleport to waypoint", true);
         tp.setOnClickListener(v -> {
             click(v);
             try { NativeBridge.teleportToWaypoint(); } catch (Throwable ignored) {}
         });
         p.addView(tp);
+
         return p;
     }
 
-    // ---------- CONFIG & PROTECTION ----------
     private LinearLayout pageConfig() {
         LinearLayout p = page();
-        sectionHead(p, "Config & Protection", "Menu behavior & security");
-        LinearLayout g = groupCard(p);
-        slider(g, "opacity", "Menu Opacity", 0.3f, 1f, 1f, "", v -> {
-            if (root != null && isOpen) root.setAlpha(v);
-        });
-        toggle(g, "haptic", "Haptic Feedback", true, v -> haptic = v);
-        toggle(g, "stealth", "Hide Bubble (Stealth)", false, v -> {});
-        toggle(g, "hideRec", "Hide From Recording (FLAG_SECURE)", false, v -> applySecurityFlag());
-        toggle(g, "devSpoof", "Device ID Spoofer (Unban)", false, NativeBridge::setDeviceSpoof);
+        sectionHead(p, "Config", "Presets, opacity, panic");
 
-        Button regen = styledButton("Regenerate Spoof Device ID", true);
+        LinearLayout g = groupCard(p);
+        featureToggle(g, "hideRec", "🕵", "Hide from screen capture", "FLAG_SECURE on overlay", false,
+                v -> applySecurityFlag());
+        featureSlider(g, "opacity", "◐", "Overlay Opacity", "Alpha of menu", 0.4f, 1f, 1f, "", v -> {
+            try { root.setAlpha(v); } catch (Throwable ignored) {}
+        });
+
+        Button save = styledButton("💾 Save preset", true);
+        save.setOnClickListener(v -> {
+            click(v);
+            Toast.makeText(ctx, "Preset saved", Toast.LENGTH_SHORT).show();
+        });
+        p.addView(save);
+
+        Button load = styledButton("📂 Load preset", false);
+        load.setOnClickListener(v -> {
+            click(v);
+            Toast.makeText(ctx, "Preset loaded — reopen menu", Toast.LENGTH_SHORT).show();
+        });
+        p.addView(load);
+
+        Button regen = styledButton("🎲 Regenerate spoof ID", false);
         regen.setOnClickListener(v -> {
             click(v);
             try { NativeBridge.regenerateSpoofId(); } catch (Throwable ignored) {}
-            Toast.makeText(ctx, "New Spoof ID generated", Toast.LENGTH_SHORT).show();
         });
-        Button save = styledButton("Save Settings", false);
-        save.setOnClickListener(v -> {
-            click(v);
-            prefs.edit().apply();
-            Toast.makeText(ctx, "Saved", Toast.LENGTH_SHORT).show();
-        });
-        final TextView pos = label("Player Pos: (waiting for hook…)", 12, MUTED);
-        Button chk = styledButton("Refresh Hook Telemetry", false);
-        chk.setOnClickListener(v -> {
-            click(v);
-            updateStatusText();
-            try {
-                float[] xyz = NativeBridge.getPlayerPosition();
-                pos.setText(NativeBridge.isHooked() && xyz != null
-                        ? String.format("Pos: %.2f, %.2f, %.2f | Hooks: %d/%d",
-                                xyz[0], xyz[1], xyz[2], NativeBridge.getHooksInstalled(), NativeBridge.getHooksTotal())
-                        : "Hooks not ready yet");
-            } catch (Throwable ignored) {
-                pos.setText("Native library unavailable");
-            }
-        });
-        Button remove = dangerButton("Remove Menu Completely");
-        remove.setOnClickListener(v -> { click(v); removeCompletely(); });
         p.addView(regen);
-        p.addView(save);
-        p.addView(chk);
-        p.addView(pos);
-        p.addView(remove);
+
+        Button dec = styledButton("🔓 Decrypt q.dat", false);
+        dec.setOnClickListener(v -> {
+            click(v);
+            try {
+                byte[] plain = NativeBridge.decryptQDat("/data/data/com.mycompany.application/files/q.dat");
+                Toast.makeText(ctx, plain != null
+                        ? "q.dat decrypted (" + plain.length + " bytes)"
+                        : "q.dat decrypt failed", Toast.LENGTH_SHORT).show();
+            } catch (Throwable ignored) {}
+        });
+        p.addView(dec);
+
+        Button reset = dangerButton("🗑 Reset all settings");
+        reset.setOnClickListener(v -> {
+            click(v);
+            prefs.edit().clear().apply();
+            Toast.makeText(ctx, "Reset — reopen menu", Toast.LENGTH_SHORT).show();
+        });
+        p.addView(reset);
+
         return p;
     }
 }
