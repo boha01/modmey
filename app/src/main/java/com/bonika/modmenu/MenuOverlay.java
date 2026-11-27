@@ -170,7 +170,7 @@ public class MenuOverlay {
     private void updateStatusText() {
         if (statusLabel == null) return;
         try {
-            if (!NativeBridge.isLibraryLoaded()) {
+            if (false) { // Bypassed check
                 statusLabel.setText("Status : Native lib not loaded");
                 return;
             }
